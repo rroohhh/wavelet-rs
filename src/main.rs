@@ -68,24 +68,30 @@ impl<'a> WaveletTransformer<'a> {
             ($input:ident, $output:ident, $first:ident, $second:ident, $firstlen:ident, $secondlen:ident, |$vm:ident| $map_expr:expr, |$vu:ident| $unmap_expr:expr, |$off:ident| $idx_expr:expr) => {
                 for $first in 0..$firstlen {
                     let $second = 0;
-                    let mut prev_lf = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, -1isize, $idx_expr)], $map_expr) + wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, -2isize, $idx_expr)], $map_expr);
+                    let mut prev_lf = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, $secondlen - 1, $idx_expr)], $map_expr) + wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, $secondlen - 2, $idx_expr)], $map_expr);
                     let mut this_lf = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 0, $idx_expr)], $map_expr) + wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 1, $idx_expr)], $map_expr);
 
-                    for $second in (0..$secondlen).step_by(2) {
-                        let pxp0 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 0, $idx_expr)], $map_expr);
-                        let pxp1 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 1, $idx_expr)], $map_expr);
-
-                        let pxp2 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 2, $idx_expr)], $map_expr);
-                        let pxp3 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 3, $idx_expr)], $map_expr);
-                        let next_lf = pxp2 + pxp3;
-
-                        $output[wavelet1d!(@off $off, -($second as isize / 2), $idx_expr)] = wavelet1d!(@unmap $vu, this_lf, $unmap_expr);
-                        $output[wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr)] = wavelet1d!(@unmap $vu, pxp0 - pxp1 + ((next_lf - prev_lf + B::FOUR) >> B::THREE), $unmap_expr);
-
-                        prev_lf = this_lf;
-                        this_lf = next_lf;
+                    for $second in (0..($secondlen - 2)).step_by(2) {
+                        wavelet1d!(@calculation $first, $second, $secondlen, $input, $output, prev_lf, this_lf, 2, 3, $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
                     }
+                    let $second = $secondlen - 2;
+                    wavelet1d!(@calculation $first, $second, $secondlen, $input, $output, prev_lf, this_lf, -($secondlen as isize - 2), -($secondlen as isize - 3), $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
                 }
+            };
+            (@calculation $first:ident, $second:ident, $secondlen:ident, $input:ident, $output:ident, $prev_lf:ident, $this_lf:ident, $a:expr, $b:expr, $vm:ident, $map_expr:expr, $vu:ident, $unmap_expr:expr, $off:ident, $idx_expr:expr) => {
+                let pxp0 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 0, $idx_expr)], $map_expr);
+                let pxp1 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, 1, $idx_expr)], $map_expr);
+
+                let pxp2 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, $a, $idx_expr)], $map_expr);
+                let pxp3 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, $b, $idx_expr)], $map_expr);
+                let next_lf = pxp2 + pxp3;
+
+                $output[wavelet1d!(@off $off, -($second as isize / 2), $idx_expr)] = wavelet1d!(@unmap $vu, $this_lf, $unmap_expr);
+                $output[wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr)] = wavelet1d!(@unmap $vu, pxp0 - pxp1 + ((next_lf - $prev_lf + B::FOUR) >> B::THREE), $unmap_expr);
+
+
+                $prev_lf = $this_lf;
+                $this_lf = next_lf;
             };
             (@map $v:ident, $value:expr, $map_expr:expr) => {
                 {
@@ -130,7 +136,7 @@ impl<'a> WaveletTransformer<'a> {
                     rectw,
                     |v| v.as_intermediate(),
                     |v| <G as CanBeOutputFor<B, G>>::map(v),
-                    |off| y * w + (((x + rectw) as isize + off as isize) as usize) % rectw
+                    |off| y * w + (x as isize + off as isize) as usize
                 );
             } else {
                 wavelet1d!(
@@ -142,7 +148,7 @@ impl<'a> WaveletTransformer<'a> {
                     rectw,
                     |v| <G as CanBeOutputFor<B, G>>::unmap(v),
                     |v| <G as CanBeOutputFor<B, G>>::map(v),
-                    |off| y * w + (((x + rectw) as isize + off as isize) as usize) % rectw
+                    |off| y * w + (x as isize + off as isize) as usize
                 );
             }
 
@@ -155,7 +161,7 @@ impl<'a> WaveletTransformer<'a> {
                 recth,
                 |v| <G as CanBeOutputFor<B, G>>::unmap(v),
                 |v| <G as CanBeOutputFor<B, G>>::map(v),
-                |off| (((y as isize + recth as isize + off as isize) as usize) % recth) * w + x
+                |off| ((y as isize + off as isize) as usize) * w + x
             );
 
             rectw /= 2;
@@ -209,21 +215,29 @@ impl<'a> WaveletTransformer<'a> {
         macro_rules! iwavelet1d {
             ($input:ident, $output:ident, $first:ident, $second:ident, $firstlen:expr, $secondlen:expr, |$vm:ident| $map_expr:expr, |$vu:ident| $unmap_expr:expr, |$lfoff:ident| $lf_idx_expr:expr, |$hfoff:ident| $hf_idx_expr:expr) => {
                 for $first in 0..$firstlen {
-                    for $second in 0..$secondlen {
-                        let lfm1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, -1isize, $lf_idx_expr)], $map_expr);
-                        let lfp1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, 1, $lf_idx_expr)], $map_expr);
-                        let lfp0 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, 0, $lf_idx_expr)], $map_expr);
+                    let $second = 0;
+                    iwavelet1d!(@calculate $input, $output, $second, $secondlen, $secondlen as isize - 1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
 
-                        let hf = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $hfoff, $secondlen, $hf_idx_expr)], $map_expr);
-
-
-                        let real1 = (((lfm1 - lfp1 + B::FOUR) >> B::THREE) + hf + lfp0) >> B::ONE;
-                        let real2 = (((lfp1 - lfm1 + B::FOUR) >> B::THREE) - hf + lfp0) >> B::ONE;
-
-                        $output[iwavelet1d!(@eval $hfoff, $second, $hf_idx_expr)] = iwavelet1d!(@eval $vu, real1, $unmap_expr);
-                        $output[iwavelet1d!(@eval $hfoff, $second + 1, $hf_idx_expr)] = iwavelet1d!(@eval $vu, real2, $unmap_expr);
+                    for $second in 1..($secondlen - 1) {
+                        iwavelet1d!(@calculate $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
+
+                    let $second = $secondlen - 1;
+                    iwavelet1d!(@calculate $input, $output, $second, $secondlen, -1isize, -($secondlen as isize - 1), $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                 }
+            };
+            (@calculate $input:ident, $output:ident, $second:ident, $secondlen:tt, $a:expr, $b:expr, $vm:ident, $map_expr:expr, $lfoff:ident, $lf_idx_expr:expr, $hfoff:ident, $hf_idx_expr:expr, $vu:ident, $unmap_expr:expr) => {
+                let lfm1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $a, $lf_idx_expr)], $map_expr);
+                let lfp1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $b, $lf_idx_expr)], $map_expr);
+                let lfp0 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, 0, $lf_idx_expr)], $map_expr);
+
+                let hf = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $hfoff, $secondlen, $hf_idx_expr)], $map_expr);
+
+                let real1 = (((lfm1 - lfp1 + B::FOUR) >> B::THREE) + hf + lfp0) >> B::ONE;
+                let real2 = (((lfp1 - lfm1 + B::FOUR) >> B::THREE) - hf + lfp0) >> B::ONE;
+
+                $output[iwavelet1d!(@eval $hfoff, $second, $hf_idx_expr)] = iwavelet1d!(@eval $vu, real1, $unmap_expr);
+                $output[iwavelet1d!(@eval $hfoff, $second + 1, $hf_idx_expr)] = iwavelet1d!(@eval $vu, real2, $unmap_expr);
             };
             (@eval $v:ident, $value:expr, $map_expr:expr) => {
                 {
@@ -248,7 +262,7 @@ impl<'a> WaveletTransformer<'a> {
                 regh,
                 |v| v,
                 |v| <G as CanBeOutputFor<B, G>>::map(v),
-                |off| (((y as isize + regh as isize + off as isize) as usize) % regh) * w + x,
+                |off| ((y as isize + off as isize) as usize) * w + x,
                 |off| (y + off) * w + x
             );
             iwavelet1d!(
@@ -260,7 +274,7 @@ impl<'a> WaveletTransformer<'a> {
                 regw,
                 |v| <G as CanBeOutputFor<B, G>>::unmap(v),
                 |v| v,
-                |off| y * w + ((x as isize + regw as isize + off as isize) as usize) % regw,
+                |off| y * w + (x as isize + off as isize) as usize,
                 |off| y * w + x + off
             );
             regw *= 2;
@@ -399,14 +413,24 @@ fn main() {
     let wavelet_config = vec![];
     let wavelet_transformer = WaveletTransformer::new(WaveletConfig::new(&wavelet_config));
 
+
     let now = std::time::Instant::now();
-    wavelet_transformer.transform_with_two_buffers(image, &mut out, &mut tmp);
-    wavelet_transformer.reverse_transform_with_two_buffers(
-        info.width as usize,
-        info.height as usize,
-        &mut out.clone(),
-        &mut decoded,
-    );
+    for _ in 0..60 {
+        let image = Image::new(
+            info.width as usize,
+            info.height as usize,
+            image_data.clone(),
+            BitDepth::U8,
+        );
+
+        wavelet_transformer.transform_with_two_buffers(image, &mut out, &mut tmp);
+        wavelet_transformer.reverse_transform_with_two_buffers(
+            info.width as usize,
+            info.height as usize,
+            &mut out,
+            &mut decoded,
+        );
+    }
     println!("{}", now.elapsed().as_secs_f64());
 
     for i in 0..image_data.len() {
