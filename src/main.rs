@@ -126,6 +126,8 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                 let lf_rounding = ($lf_quant >> B::ONE);
                 let hf_rounding = ($hf_quant >> B::ONE);
 
+                // println!("{} {}", $first, $second);
+
                 $output[wavelet1d!(@off $off, -($second as isize / 2), $idx_expr)] = wavelet1d!(@unmap $vu, (pxp0 + pxp1 + lf_rounding) / $lf_quant, $unmap_expr);
                 $output[wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr)] = wavelet1d!(@unmap $vu, (pxp0 - pxp1 + ((pxp2 + pxp3 - pxm1 - pxm2 + B::FOUR) >> B::THREE) + hf_rounding) / $hf_quant, $unmap_expr);
             };
@@ -314,15 +316,13 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                     iwavelet1d!(@calculate $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, $secondlen as isize - 1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                 }
 
-                let iter = (2..($secondlen - 2)).step_by(2).take($secondlen / 2 - 1);
-                for $second in iter {
+                for $second in 1..($secondlen / 2) {
                     for $first in 0..$firstlen {
                         iwavelet1d!(@calculate $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
                 }
 
-                let iter = (2..($secondlen - 2)).step_by(2).skip($secondlen / 2 - 1);
-                for $second in iter {
+                for $second in ($secondlen / 2)..($secondlen - 1) {
                     for $first in 0..$firstlen {
                         iwavelet1d!(@calculate $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
@@ -396,7 +396,6 @@ enum RleIterItem<T> {
     Zero(usize)
 }
 
-#[derive(Debug)]
 struct RleIter<'a, T> {
     data: &'a dyn Deref<Target = [T]>,
     pos: usize,
@@ -414,18 +413,18 @@ impl<'a, T: Copy> Iterator for RleIter<'a, T> {
         fn next_suitable_rle_word<'b, T>(s: &mut RleIter<'b, T>, num_zeros: usize) -> usize {
             loop {
                 if s.rle_index >= 0 {
-                    if num_zeros > s.allowed_rle_words[s.rle_index as usize] {
+                    if num_zeros >= s.allowed_rle_words[s.rle_index as usize] {
                         return s.allowed_rle_words[s.rle_index as usize]
                     } else {
-                        return 1
+                        s.rle_index -= 1;
                     }
                 } else {
-                    s.rle_index -= 1;
+                    return 1
                 }
             }
         }
 
-        println!("{:?}", self);
+        // println!("pos {}, found_zeros {}, rle_index {}", self.pos, self.found_zeros, self.rle_index);
 
         if (self.pos == self.data.len()) && (self.found_zeros == 0) {
             None
@@ -439,14 +438,18 @@ impl<'a, T: Copy> Iterator for RleIter<'a, T> {
 
             self.found_zeros = 0;
             self.rle_index = 0;
-            while !(self.is_nonzero)(next_value) && (self.pos < self.data.len()) {
+            while !(self.is_nonzero)(next_value) {
                 self.found_zeros += 1;
-                if (self.rle_index < self.allowed_rle_words.len() as isize) && (self.found_zeros > self.allowed_rle_words[self.rle_index as usize]) {
+                if ((self.rle_index + 1) < self.allowed_rle_words.len() as isize) && (self.found_zeros > self.allowed_rle_words[self.rle_index as usize]) {
                     self.rle_index += 1;
                 }
 
                 self.pos += 1;
-                next_value = self.data[self.pos];
+                if (self.pos + 1) < self.data.len() {
+                    next_value = self.data[self.pos];
+                } else {
+                    break
+                }
             }
 
             if self.found_zeros > 0 {
@@ -608,7 +611,7 @@ fn main() {
     let mut tmp = vec![0i16; info.buffer_size()];
     let mut decoded = vec![0i16; info.buffer_size()];
 
-    let wavelet_config = vec![QuantizationConfig { lf: 1, hfx: 1, hfy: 1, hfxy: 1 }; 3];
+    let wavelet_config = vec![QuantizationConfig { lf: 1, hfx: 1, hfy: 1, hfxy: 1 }; 1];
     let wavelet_transformer = WaveletTransformer::new(WaveletConfig::new(&wavelet_config));
 
 
@@ -621,7 +624,9 @@ fn main() {
         BitDepth::U8,
     );
     wavelet_transformer.transform_with_two_buffers(image.clone(), &mut out, &mut tmp);
-    println!("image pixels: {}, rle_elements: {}", image.data.len(), WaveletTransformer::rle_iter::<BitDepth::U8, _, _>(&out, &(0..4096).collect::<Vec<_>>()).collect::<Vec<_>>().len());
+
+    println!("image pixels: {}, rle_elements: {}", image.data.len(), WaveletTransformer::rle_iter::<BitDepth::U8, _, _>(&out, &(1..4096).collect::<Vec<_>>()).collect::<Vec<_>>().len());
+
     wavelet_transformer.reverse_transform_with_two_buffers(
         info.width as usize,
         info.height as usize,
