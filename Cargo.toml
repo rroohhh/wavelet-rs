@@ -10,6 +10,7 @@ edition = "2018"
 tiff = "*"
 png = "*"
 bytemuck = "*"
+rawloader = "*"
 
 [profile.release]
 lto = true

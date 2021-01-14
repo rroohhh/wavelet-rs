@@ -90,28 +90,22 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                 }
             };
             (@vertical $quantization:expr, $input:ident, $output:ident, $first:ident, $second:ident, $firstlen:ident, $secondlen:ident, |$vm:ident| $map_expr:expr, |$vu:ident| $unmap_expr:expr, |$off:ident| $idx_expr:expr) => {
-                for $first in 0..$firstlen {
-                    let $second = 0;
-                    wavelet1d!(@calculation $quantization.lf, $quantization.hfy, $first, $second, $secondlen, $input, $output, $secondlen - 1, $secondlen - 2, 2, 3, $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
-                }
+                for $second in (0..$secondlen).step_by(2) {
+                    let (a, b, c, d) : (isize, isize, isize, isize) = if $second == 0 {
+                        (($secondlen - 1) as isize, ($secondlen - 2) as isize, 2, 3)
+                    } else if $second == $secondlen - 2 {
+                        (-1, -2, -($secondlen as isize - 2), -($secondlen as isize - 3))
+                    } else {
+                        (-1, -2, 2, 3)
+                    };
 
-                let iter = (2..($secondlen - 2)).step_by(2).take($secondlen / 2 - 1);
-                for $second in iter {
-                    for $first in 0..$firstlen {
-                        wavelet1d!(@calculation $quantization.lf, $quantization.hfy, $first, $second, $secondlen, $input, $output, -1, -2, 2, 3, $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
+                    for $first in 0..($firstlen / 2) {
+                        wavelet1d!(@calculation $quantization.lf, $quantization.hfy, $first, $second, $secondlen, $input, $output, a, b, c, d, $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
                     }
-                }
 
-                let iter = (2..($secondlen - 2)).step_by(2).skip($secondlen / 2 - 1);
-                for $second in iter {
-                    for $first in 0..$firstlen {
-                        wavelet1d!(@calculation $quantization.hfx, $quantization.hfxy, $first, $second, $secondlen, $input, $output, -1, -2, 2, 3, $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
+                    for $first in ($firstlen / 2)..$firstlen {
+                        wavelet1d!(@calculation $quantization.hfx, $quantization.hfxy, $first, $second, $secondlen, $input, $output, a, b, c, d, $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
                     }
-                }
-
-                for $first in 0..$firstlen {
-                    let $second = $secondlen - 2;
-                    wavelet1d!(@calculation $quantization.hfx, $quantization.hfxy, $first, $second, $secondlen, $input, $output, -1, -2, -($secondlen as isize - 2), -($secondlen as isize - 3), $vm, $map_expr, $vu, $unmap_expr, $off, $idx_expr);
                 }
             };
             (@calculation $lf_quant:expr, $hf_quant:expr, $first:ident, $second:ident, $secondlen:ident, $input:ident, $output:ident, $a:expr, $b:expr, $c:expr, $d:expr, $vm:ident, $map_expr:expr, $vu:ident, $unmap_expr:expr, $off:ident, $idx_expr:expr) => {
@@ -125,8 +119,7 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                 let pxp3 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, $d, $idx_expr)], $map_expr);
                 let lf_rounding = ($lf_quant >> B::ONE);
                 let hf_rounding = ($hf_quant >> B::ONE);
-
-                // println!("{} {}", $first, $second);
+                // println!("{}, {}, {}, {}", wavelet1d!(@off $off, -($second as isize / 2), $idx_expr), wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr), $lf_quant, $hf_quant);
 
                 $output[wavelet1d!(@off $off, -($second as isize / 2), $idx_expr)] = wavelet1d!(@unmap $vu, (pxp0 + pxp1 + lf_rounding) / $lf_quant, $unmap_expr);
                 $output[wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr)] = wavelet1d!(@unmap $vu, (pxp0 - pxp1 + ((pxp2 + pxp3 - pxm1 - pxm2 + B::FOUR) >> B::THREE) + hf_rounding) / $hf_quant, $unmap_expr);
@@ -166,6 +159,7 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
         for i in 0..level {
             let quantization = &self.config.quantization_config[i];
 
+            println!("forward horizontal {}", i);
             if i == 0 {
                 wavelet1d!(@horizontal
                     input,
@@ -192,6 +186,7 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                 );
             }
 
+            println!("forward vertical {}", i);
             wavelet1d!(@vertical
                 quantization,
                 temporary,
@@ -300,42 +295,44 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
             (@horizontal $input:ident, $output:ident, $first:ident, $second:ident, $firstlen:expr, $secondlen:expr, |$vm:ident| $map_expr:expr, |$vu:ident| $unmap_expr:expr, |$lfoff:ident| $lf_idx_expr:expr, |$hfoff:ident| $hf_idx_expr:expr) => {
                 for $first in 0..$firstlen {
                     let $second = 0;
-                    iwavelet1d!(@calculate B::ONE, B::ONE, $input, $output, $second, $secondlen, $secondlen as isize - 1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    iwavelet1d!(@calculate B::ONE, B::ONE, B::ONE, B::ONE, $input, $output, $second, $secondlen, $secondlen as isize - 1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
 
                     for $second in 1..($secondlen - 1) {
-                        iwavelet1d!(@calculate B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                        iwavelet1d!(@calculate B::ONE, B::ONE, B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
 
                     let $second = $secondlen - 1;
-                    iwavelet1d!(@calculate B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, -($secondlen as isize - 1), $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    iwavelet1d!(@calculate B::ONE, B::ONE, B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, -($secondlen as isize - 1), $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                 }
             };
             (@vertical $quantization:expr, $input:ident, $output:ident, $first:ident, $second:ident, $firstlen:expr, $secondlen:expr, |$vm:ident| $map_expr:expr, |$vu:ident| $unmap_expr:expr, |$lfoff:ident| $lf_idx_expr:expr, |$hfoff:ident| $hf_idx_expr:expr) => {
-                for $first in 0..$firstlen {
-                    let $second = 0;
-                    iwavelet1d!(@calculate $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, $secondlen as isize - 1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
-                }
+                for $second in 0..$secondlen {
+                    let (a, b) = if $second == 0 {
+                        ($secondlen as isize - 1isize, 1)
+                    } else if ($second == $secondlen - 1) {
+                        (-1isize, -($secondlen as isize - 1))
+                    } else {
+                        (-1isize, 1)
+                    };
 
-                for $second in 1..($secondlen / 2) {
-                    for $first in 0..$firstlen {
-                        iwavelet1d!(@calculate $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    for $first in 0..($firstlen / 2 - 1) {
+                        iwavelet1d!(@calculate $quantization.lf, $quantization.lf, $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
-                }
 
-                for $second in ($secondlen / 2)..($secondlen - 1) {
-                    for $first in 0..$firstlen {
-                        iwavelet1d!(@calculate $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    let $first = $firstlen / 2 - 1;
+                    iwavelet1d!(@calculate $quantization.lf, $quantization.lf, $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    let $first = $firstlen / 2;
+                    iwavelet1d!(@calculate $quantization.hfx, $quantization.lf, $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+
+                    for $first in ($firstlen / 2 + 1)..$firstlen {
+                        iwavelet1d!(@calculate $quantization.hfx, $quantization.hfx, $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
-                }
-
-                for $first in 0..$firstlen {
-                    let $second = $secondlen - 1;
-                    iwavelet1d!(@calculate $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, -1isize, -($secondlen as isize - 1), $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                 }
             };
-            (@calculate $lf_quant:expr, $hf_quant:expr, $input:ident, $output:ident, $second:ident, $secondlen:tt, $a:expr, $b:expr, $vm:ident, $map_expr:expr, $lfoff:ident, $lf_idx_expr:expr, $hfoff:ident, $hf_idx_expr:expr, $vu:ident, $unmap_expr:expr) => {
-                let lfm1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $a, $lf_idx_expr)], $map_expr) * $lf_quant;
-                let lfp1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $b, $lf_idx_expr)], $map_expr) * $lf_quant;
+            (@calculate $lf_quant:expr, $lf_quant_m1:expr, $lf_quant_p1:expr, $hf_quant:expr, $input:ident, $output:ident, $second:ident, $secondlen:tt, $a:expr, $b:expr, $vm:ident, $map_expr:expr, $lfoff:ident, $lf_idx_expr:expr, $hfoff:ident, $hf_idx_expr:expr, $vu:ident, $unmap_expr:expr) => {
+                // println!("{}, {}, {}, {}", iwavelet1d!(@eval $lfoff, 0, $lf_idx_expr), iwavelet1d!(@eval $hfoff, $secondlen, $hf_idx_expr), $lf_quant, $hf_quant);
+                let lfm1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $a, $lf_idx_expr)], $map_expr) * $lf_quant_m1;
+                let lfp1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $b, $lf_idx_expr)], $map_expr) * $lf_quant_p1;
                 let lfp0 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, 0, $lf_idx_expr)], $map_expr) * $lf_quant;
 
                 let hf = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $hfoff, $secondlen, $hf_idx_expr)], $map_expr) * $hf_quant;
@@ -360,6 +357,7 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
         let mut regh = h / (1 << level);
 
         for i in 0..level {
+            println!("inverse vertical {}", i);
             iwavelet1d!(@vertical
                 &self.config.quantization_config[i],
                 output,
@@ -373,6 +371,7 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                 |off| ((y as isize + off as isize) as usize) * w + x,
                 |off| (y + off) * w + x
             );
+            println!("inverse horizontal {}", i);
             iwavelet1d!(@horizontal
                 input,
                 output,
@@ -611,7 +610,7 @@ fn main() {
     let mut tmp = vec![0i16; info.buffer_size()];
     let mut decoded = vec![0i16; info.buffer_size()];
 
-    let wavelet_config = vec![QuantizationConfig { lf: 1, hfx: 1, hfy: 1, hfxy: 1 }; 1];
+    let wavelet_config = vec![QuantizationConfig { lf: 1, hfx: 1, hfy: 1, hfxy: 1 }; 3];
     let wavelet_transformer = WaveletTransformer::new(WaveletConfig::new(&wavelet_config));
 
 
@@ -626,6 +625,7 @@ fn main() {
     wavelet_transformer.transform_with_two_buffers(image.clone(), &mut out, &mut tmp);
 
     println!("image pixels: {}, rle_elements: {}", image.data.len(), WaveletTransformer::rle_iter::<BitDepth::U8, _, _>(&out, &(1..4096).collect::<Vec<_>>()).collect::<Vec<_>>().len());
+    write(out.clone(), "test.tiff", info.width, info.height);
 
     wavelet_transformer.reverse_transform_with_two_buffers(
         info.width as usize,
@@ -645,7 +645,6 @@ fn main() {
     }
 
     write(decoded, "test_decoded.tiff", info.width, info.height);
-    write(out, "test.tiff", info.width, info.height);
 }
 
 fn write(d: Vec<i16>, name: &str, width: u32, height: u32) {
