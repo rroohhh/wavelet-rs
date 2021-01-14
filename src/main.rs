@@ -112,6 +112,7 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
             + Sub<B::T, Output = B::T>
             + Shr<B::T, Output = B::T>
             + Div<B::T, Output = B::T>
+            + Mul<B::T, Output = B::T>
             + std::fmt::Display,
     {
         macro_rules! wavelet1d {
@@ -156,11 +157,19 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                 let pxp3 = wavelet1d!(@map $vm, $input[wavelet1d!(@off $off, $d, $idx_expr)], $map_expr);
                 let lf_rounding = ($lf_quant >> B::ONE);
                 let hf_rounding = ($hf_quant >> B::ONE);
+                // println!("{}", lf_rounding);
+                // println!("{}", hf_rounding);
                 // eprintln!("{}, {}", wavelet1d!(@off $off, -($second as isize / 2), $idx_expr), $lf_quant);
                 // eprintln!("{}, {}", wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr), $hf_quant);
+                let lf_value = pxp0 + pxp1;
+                let lf_value = (lf_value + lf_rounding * <B as IntermediateType>::signum(lf_value)) / $lf_quant;
+                let hf_value = pxp0 - pxp1 + ((pxp2 + pxp3 - pxm1 - pxm2 + B::FOUR) >> B::THREE);
+                let hf_value = (hf_value + hf_rounding * <B as IntermediateType>::signum(hf_value)) / $hf_quant;
 
-                $output[wavelet1d!(@off $off, -($second as isize / 2), $idx_expr)] = wavelet1d!(@unmap $vu, (pxp0 + pxp1 + lf_rounding) / $lf_quant, $unmap_expr);
-                $output[wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr)] = wavelet1d!(@unmap $vu, (pxp0 - pxp1 + ((pxp2 + pxp3 - pxm1 - pxm2 + B::FOUR) >> B::THREE) + hf_rounding) / $hf_quant, $unmap_expr);
+                $output[wavelet1d!(@off $off, -($second as isize / 2), $idx_expr)] =
+                    wavelet1d!(@unmap $vu, lf_value, $unmap_expr);
+                $output[wavelet1d!(@off $off, -($second as isize / 2) + $secondlen as isize / 2, $idx_expr)] =
+                    wavelet1d!(@unmap $vu, hf_value, $unmap_expr);
             };
             (@map $v:ident, $value:expr, $map_expr:expr) => {
                 {
@@ -254,6 +263,7 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
             + Sub<B::T, Output = B::T>
             + Div<B::T, Output = B::T>
             + Shr<B::T, Output = B::T>
+            + Mul<B::T, Output = B::T>
             + std::fmt::Display,
     {
         let mut temp = output.clone();
@@ -336,14 +346,14 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
             (@horizontal $input:ident, $output:ident, $first:ident, $second:ident, $firstlen:expr, $secondlen:expr, |$vm:ident| $map_expr:expr, |$vu:ident| $unmap_expr:expr, |$lfoff:ident| $lf_idx_expr:expr, |$hfoff:ident| $hf_idx_expr:expr) => {
                 for $first in 0..$firstlen {
                     let $second = 0;
-                    iwavelet1d!(@calculate B::ONE, B::ONE, B::ONE, B::ONE, $input, $output, $second, $secondlen, $secondlen as isize - 1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    iwavelet1d!(@calculate B::ONE, B::ONE, $input, $output, $second, $secondlen, $secondlen as isize - 1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
 
                     for $second in 1..($secondlen - 1) {
-                        iwavelet1d!(@calculate B::ONE, B::ONE, B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                        iwavelet1d!(@calculate B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, 1, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
 
                     let $second = $secondlen - 1;
-                    iwavelet1d!(@calculate B::ONE, B::ONE, B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, -($secondlen as isize - 1), $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    iwavelet1d!(@calculate B::ONE, B::ONE, $input, $output, $second, $secondlen, -1isize, -($secondlen as isize - 1), $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                 }
             };
             (@vertical $quantization:expr, $input:ident, $output:ident, $first:ident, $second:ident, $firstlen:expr, $secondlen:expr, |$vm:ident| $map_expr:expr, |$vu:ident| $unmap_expr:expr, |$lfoff:ident| $lf_idx_expr:expr, |$hfoff:ident| $hf_idx_expr:expr) => {
@@ -356,47 +366,18 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
                         (-1isize, 1)
                     };
 
-                    let $first = 0;
-                    eprintln!("first = {}, second = {}", $first, $second);
-                    iwavelet1d!(@calculate $quantization.lf, $quantization.hfx, $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
-
-                    for $first in 1..($firstlen / 2 - 1) {
-                    eprintln!("first = {}, second = {}", $first, $second);
-                        iwavelet1d!(@calculate $quantization.lf, $quantization.lf, $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    for $first in 0..($firstlen / 2) {
+                        iwavelet1d!(@calculate $quantization.lf, $quantization.hfy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
 
-                    let $first = $firstlen / 2 - 1;
-                    eprintln!("first = {}, second = {}", $first, $second);
-                    iwavelet1d!(@calculate $quantization.lf, $quantization.lf, $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
-                    let $first = $firstlen / 2;
-                    eprintln!("first = {}, second = {}", $first, $second);
-                    iwavelet1d!(@calculate $quantization.hfx, $quantization.lf, $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
-
-                    for $first in ($firstlen / 2 + 1)..($firstlen - 1) {
-                    eprintln!("first = {}, second = {}", $first, $second);
-                        iwavelet1d!(@calculate $quantization.hfx, $quantization.hfx, $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
+                    for $first in ($firstlen / 2)..$firstlen {
+                        iwavelet1d!(@calculate $quantization.hfx, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                     }
-
-                    let $first = $firstlen - 1;
-                    eprintln!("first = {}, second = {}", $first, $second);
-                    iwavelet1d!(@calculate $quantization.hfx, $quantization.hfx, $quantization.lf, $quantization.hfxy, $input, $output, $second, $secondlen, a, b, $vm, $map_expr, $lfoff, $lf_idx_expr, $hfoff, $hf_idx_expr, $vu, $unmap_expr);
                 }
             };
-            (@calculate $lf_quant:expr, $lf_quant_m1:expr, $lf_quant_p1:expr, $hf_quant:expr, $input:ident, $output:ident, $second:ident, $secondlen:tt, $a:expr, $b:expr, $vm:ident, $map_expr:expr, $lfoff:ident, $lf_idx_expr:expr, $hfoff:ident, $hf_idx_expr:expr, $vu:ident, $unmap_expr:expr) => {
-                if iwavelet1d!(@eval $lfoff, $a, $lf_idx_expr) == 0 {
-                    eprintln!("a, {}, {}", iwavelet1d!(@eval $lfoff, $a, $lf_idx_expr), $lf_quant_m1);
-                }
-                if iwavelet1d!(@eval $lfoff, $b, $lf_idx_expr) == 0 {
-                    eprintln!("b, {}, {}", iwavelet1d!(@eval $lfoff, $b, $lf_idx_expr), $lf_quant_p1)
-                }
-                if iwavelet1d!(@eval $lfoff, 0, $lf_idx_expr) == 0 {
-                    eprintln!("0, {}, {}", iwavelet1d!(@eval $lfoff, 0, $lf_idx_expr), $lf_quant);
-                }
-                if iwavelet1d!(@eval $hfoff, $secondlen, $hf_idx_expr) == 0 {
-                    eprintln!("h, {}, {}", iwavelet1d!(@eval $hfoff, $secondlen, $hf_idx_expr), $hf_quant);
-                }
-                let lfm1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $a, $lf_idx_expr)], $map_expr) * $lf_quant_m1;
-                let lfp1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $b, $lf_idx_expr)], $map_expr) * $lf_quant_p1;
+            (@calculate $lf_quant:expr, $hf_quant:expr, $input:ident, $output:ident, $second:ident, $secondlen:tt, $a:expr, $b:expr, $vm:ident, $map_expr:expr, $lfoff:ident, $lf_idx_expr:expr, $hfoff:ident, $hf_idx_expr:expr, $vu:ident, $unmap_expr:expr) => {
+                let lfm1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $a, $lf_idx_expr)], $map_expr) * $lf_quant;
+                let lfp1 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, $b, $lf_idx_expr)], $map_expr) * $lf_quant;
                 let lfp0 = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $lfoff, 0, $lf_idx_expr)], $map_expr) * $lf_quant;
 
                 let hf = iwavelet1d!(@eval $vm, $input[iwavelet1d!(@eval $hfoff, $secondlen, $hf_idx_expr)], $map_expr) * $hf_quant;
@@ -472,6 +453,10 @@ struct RleIter<'a, T> {
 impl<'a, T: Copy> Iterator for RleIter<'a, T> {
     type Item = RleIterItem<T>;
 
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, Some(self.data.len()))
+    }
+
     fn next(&mut self) -> Option<Self::Item> {
         fn next_suitable_rle_word<'b, T>(s: &mut RleIter<'b, T>, num_zeros: usize) -> usize {
             loop {
@@ -546,6 +531,7 @@ trait IntermediateType {
     const THREE: Self::T;
 
     fn as_i64(s: Self::T) -> i64;
+    fn signum(s: Self::T) -> Self::T;
 
     fn new() -> Self;
 }
@@ -559,6 +545,7 @@ impl IntermediateType for BitDepth::U8 {
     const THREE: Self::T = 3 as _;
 
     fn as_i64(s: Self::T) -> i64 { s as _ }
+    fn signum(s: Self::T) -> Self::T { s.signum() }
 
     fn new() -> Self { Self }
 }
@@ -572,6 +559,7 @@ impl IntermediateType for BitDepth::U9 {
     const THREE: Self::T = 3 as _;
 
     fn as_i64(s: Self::T) -> i64 { s as _ }
+    fn signum(s: Self::T) -> Self::T { s.signum() }
 
     fn new() -> Self { Self }
 }
@@ -585,6 +573,7 @@ impl IntermediateType for BitDepth::U12 {
     const THREE: Self::T = 3 as _;
 
     fn as_i64(s: Self::T) -> i64 { s as _ }
+    fn signum(s: Self::T) -> Self::T { s.signum() }
 
     fn new() -> Self { Self }
 }
@@ -674,7 +663,7 @@ fn main() {
     let mut tmp = vec![0i32; image.width * image.height];
     let mut decoded = vec![0i32; image.width * image.height];
 
-    let wavelet_config = vec![QuantizationConfig { lf: 1, hfx: 8, hfy: 1, hfxy: 1 }; 1];
+    let wavelet_config = vec![QuantizationConfig { lf: 1, hfx: 32, hfy: 32, hfxy: 32 }; 3];
     let wavelet_transformer = WaveletTransformer::new(WaveletConfig::new(&wavelet_config));
 
     let N = 1;
@@ -685,10 +674,8 @@ fn main() {
 
         println!("image pixels: {}, rle_elements: {}",
                  image.data.len(),
-                 WaveletTransformer::rle_iter::<BitDepth::U12, _, _>(&out, &(1..4096).collect::<Vec<_>>()).collect::<Vec<_>>().len());
-        write32(out.clone(), &format!("tree-{}-{}.tiff", i, c), image.w as u32, image.h as u32);
-
-        eprintln!("");
+                 WaveletTransformer::rle_iter::<BitDepth::U12, _, _>(&out, &(1..4096).collect::<Vec<_>>()).count());
+        // write32(out.clone(), &format!("tree-{}-{}.tiff", i, c), image.w as u32, image.h as u32);
 
         wavelet_transformer.reverse_transform_with_two_buffers::<BitDepth::U12, _, _, _>(
             image.w as usize,
@@ -697,18 +684,16 @@ fn main() {
             &mut decoded,
         );
 
-        println!("psnr: {}", wavelet_transformer.psnr(image.clone(), &decoded));
+        // println!("psnr: {}", wavelet_transformer.psnr(image.clone(), &decoded));
 
-        for i in 0..image.data.len() {
-            if image.data[i] as i32 != decoded[i] {
-                println!("fuckup");
-                break;
-            }
-        }
+        // for i in 0..image.data.len() {
+        //     if image.data[i] as i32 != decoded[i] {
+        //         println!("fuckup");
+        //         break;
+        //     }
+        // }
 
-        write16(decoded.clone(), &format!("decoded-{}-{}.tiff", i, c), image.w as u32, image.h as u32);
-
-        break;
+        // write16(decoded.clone(), &format!("decoded-{}-{}.tiff", i, c), image.w as u32, image.h as u32);
     }
     println!("{}", now.elapsed().as_secs_f64() / N as f64);
 }
