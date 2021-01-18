@@ -435,7 +435,8 @@ impl<'a, Q: Copy> WaveletTransformer<'a, Q> {
     }
 }
 
-enum RleIterItem<T> {
+#[derive(Hash, Ord, PartialOrd, Eq, PartialEq, Clone)]
+enum RleIterItem<T: Hash + Ord + Eq + PartialEq + Clone> {
     NonZero(T),
     Zero(usize)
 }
@@ -450,7 +451,7 @@ struct RleIter<'a, T> {
     is_nonzero: &'a dyn Fn(T) -> bool
 }
 
-impl<'a, T: Copy> Iterator for RleIter<'a, T> {
+impl<'a, T: Copy + Hash + Ord + Eq + PartialEq> Iterator for RleIter<'a, T> {
     type Item = RleIterItem<T>;
 
     fn size_hint(&self) -> (usize, Option<usize>) {
@@ -646,7 +647,7 @@ impl<D> DataContainer<D> {
 
 impl<D> Deref for DataContainer<D>
     where D: Deref
-{
+ {
     type Target = D::Target;
 
     fn deref(&self) -> &Self::Target {
@@ -654,7 +655,142 @@ impl<D> Deref for DataContainer<D>
     }
 }
 
+mod huffman {
+    use std::ops::{Deref, Add};
+
+    pub fn generate_huffman_table<T: Deref<Target = [D]>, D: Ord + Clone + Add<D, Output = D>>(frequencies: T) -> Vec<String> {
+        use std::cmp::Ordering;
+        use std::collections::BinaryHeap;
+
+        #[derive(Eq, PartialEq, Clone)]
+        struct Node<W> {
+            weight: W,
+            idx: usize,
+            left_right: Option<(usize, usize)>,
+        }
+
+        impl<W: Clone + Add<W, Output = W> + PartialOrd> Node<W> {
+            fn new(idx: usize, weight: &W) -> Self {
+                Self {
+                    weight: weight.clone(),
+                    idx,
+                    left_right: None,
+                }
+            }
+
+            fn combine(idx: usize, a: &Self, b: &Self) -> Self {
+                let (right, left) = if a.weight >= b.weight {
+                    (a, b)
+                } else {
+                    (b, a)
+                };
+
+                let left = left.idx;
+                let right = right.idx;
+
+                Self {
+                    idx,
+                    weight: a.weight.clone() + b.weight.clone(),
+                    left_right: Some((left, right)),
+                }
+            }
+        }
+
+        impl<W: Ord> Ord for Node<W> {
+            fn cmp(&self, other: &Self) -> Ordering {
+                // min heap
+                other.weight.cmp(&self.weight)
+            }
+        }
+
+        impl<W: Ord> PartialOrd for Node<W> {
+            fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                Some(self.cmp(other))
+            }
+        }
+
+        let mut nodes = Vec::with_capacity(frequencies.len() * 2);
+
+        for (i, freq) in frequencies.iter().enumerate() {
+            nodes.push(Node::new(i, freq));
+        }
+
+        let mut heap = BinaryHeap::new();
+
+        for node in &nodes {
+            heap.push(node.clone());
+        }
+
+        while heap.len() > 1 {
+            let new = Node::combine(nodes.len(), &heap.pop().unwrap(), &heap.pop().unwrap());
+            nodes.push(new);
+            heap.push(nodes.last().unwrap().clone());
+        }
+
+        let root = heap.pop().unwrap();
+
+
+        fn find_huffman_codes<W>(prefix: String, nodes: &Vec<Node<W>>, node: usize, storage: &mut Vec<String>) {
+            let node = &nodes[node];
+            match node.left_right {
+                None => {
+                    storage[node.idx] = prefix;
+                },
+                Some((left, right)) => {
+                    find_huffman_codes(prefix.clone() + "0", nodes, left, storage);
+                    find_huffman_codes(prefix + "1", nodes, right, storage);
+                }
+            }
+        }
+
+        let mut huffman_codes = vec!["".to_owned(); frequencies.len()];
+        find_huffman_codes("".to_owned(), &nodes, root.idx, &mut huffman_codes);
+
+        return huffman_codes;
+    }
+}
+
+use std::hash::Hash;
+use std::collections::HashMap;
+
+fn calculate_huffman_size<T: Ord + Hash + Clone>(data: &Vec<T>) -> usize {
+
+    let mut symbol_counts = HashMap::new();
+
+    for symbol in data {
+        symbol_counts.insert(symbol, match symbol_counts.get(symbol) {
+            Some(count) => count + 1,
+            None => 0
+        });
+    }
+
+    let mut symbols = Vec::new();
+    let mut counts = Vec::new();
+
+    for (symbol, count) in symbol_counts.into_iter() {
+        symbols.push(symbol);
+        counts.push(count);
+    }
+
+    let huffman_symbols = huffman::generate_huffman_table(counts);
+    let mut huffman_table = HashMap::<T, usize>::new();
+
+    for (symbol, huffman_symbol) in symbols.into_iter().zip(huffman_symbols.into_iter()) {
+        huffman_table.insert(symbol.clone(), huffman_symbol.len());
+    }
+
+    let mut size = 0;
+    for symbol in data {
+        size += huffman_table[symbol];
+    }
+
+    size / 8
+}
+
 fn main() {
+    let frequencies = vec![2, 6, 7, 10, 10, 11];
+    println!("{:?}", huffman::generate_huffman_table(frequencies));
+
     let image = rawloader::decode_file("axiomlabs.dng").unwrap();
 
     let images = Image::<_, _, BitDepth::U12>::split_from_raw(&image);
@@ -672,9 +808,12 @@ fn main() {
         println!("processing {}", c);
         wavelet_transformer.transform_with_two_buffers(image.clone(), &mut out, &mut tmp);
 
-        println!("image pixels: {}, rle_elements: {}",
-                 image.data.len(),
-                 WaveletTransformer::rle_iter::<BitDepth::U12, _, _>(&out, &(1..4096).collect::<Vec<_>>()).count());
+        let mut rle_symbols = Vec::with_capacity(out.len());
+        rle_symbols.extend(WaveletTransformer::rle_iter::<BitDepth::U12, _, _>(&out, &(1..4096).collect::<Vec<_>>()));
+        // let rle_symbols = .collect::<Vec<_>>();
+        println!("image pixels: {}, rle_elements: {}", image.data.len(), rle_symbols.len());
+        let huffman_length = calculate_huffman_size(&rle_symbols);
+        println!("original size: {}, huffman size: {}", image.w * image.h * 3 / 4, huffman_length);
         // write32(out.clone(), &format!("tree-{}-{}.tiff", i, c), image.w as u32, image.h as u32);
 
         wavelet_transformer.reverse_transform_with_two_buffers::<BitDepth::U12, _, _, _>(
